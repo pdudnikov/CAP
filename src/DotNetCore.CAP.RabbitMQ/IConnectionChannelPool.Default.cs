@@ -103,7 +103,7 @@ public class ConnectionChannelPool : IConnectionChannelPool, IDisposable
             Password = options.Password,
             VirtualHost = options.VirtualHost,
             DispatchConsumersAsync = true,
-            ClientProvidedName = Assembly.GetEntryAssembly()?.GetName().Name!.ToLower()
+            //ClientProvidedName = Assembly.GetEntryAssembly()?.GetName().Name!.ToLower()
         };
 
         if (options.HostName.Contains(","))

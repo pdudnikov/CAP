@@ -146,7 +146,7 @@ internal sealed class RabbitMQConsumerClient : IConsumerClient
         var args = new LogMessageEventArgs
         {
             LogType = MqLogType.ConsumerCancelled,
-            Reason = string.Join(",", e.ConsumerTags)
+            Reason = string.Join(",", e.ConsumerTag)
         };
 
         OnLogCallback!(args);
@@ -159,7 +159,7 @@ internal sealed class RabbitMQConsumerClient : IConsumerClient
         var args = new LogMessageEventArgs
         {
             LogType = MqLogType.ConsumerUnregistered,
-            Reason = string.Join(",", e.ConsumerTags)
+            Reason = string.Join(",", e.ConsumerTag)
         };
 
         OnLogCallback!(args);
@@ -172,7 +172,7 @@ internal sealed class RabbitMQConsumerClient : IConsumerClient
         var args = new LogMessageEventArgs
         {
             LogType = MqLogType.ConsumerRegistered,
-            Reason = string.Join(",", e.ConsumerTags)
+            Reason = string.Join(",", e.ConsumerTag)
         };
 
         OnLogCallback!(args);
@@ -215,7 +215,7 @@ internal sealed class RabbitMQConsumerClient : IConsumerClient
             }
         }
 
-        var message = new TransportMessage(headers, e.Body.ToArray());
+        var message = new TransportMessage(headers, e.Body);
 
         await OnMessageCallback!(message, e.DeliveryTag);
     }

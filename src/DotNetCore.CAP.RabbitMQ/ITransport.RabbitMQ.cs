@@ -40,7 +40,7 @@ internal sealed class RabbitMQTransport : ITransport
             props.DeliveryMode = 2;
             props.Headers = message.Headers.ToDictionary(x => x.Key, x => (object?)x.Value);
 
-            channel.BasicPublish(_exchange, message.GetName(), props, message.Body);
+            channel.BasicPublish(_exchange, message.GetName(), props, message.Body.ToArray());
 
             // Enable publish confirms
             if (channel.NextPublishSeqNo > 0) channel.WaitForConfirmsOrDie(TimeSpan.FromSeconds(5));
