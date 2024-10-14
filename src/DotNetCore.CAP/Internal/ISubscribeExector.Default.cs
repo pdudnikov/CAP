@@ -60,7 +60,9 @@ internal class SubscribeExecutor : ISubscribeExecutor
 
                 TracingError(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), message.Origin, null, new Exception(error));
 
-                return OperateResult.Failed(new SubscriberNotFoundException(error));
+                var ex = new SubscriberNotFoundException(error);
+                await SetFailedState(message, ex);
+                return OperateResult.Failed(ex);
             }
         }
 
@@ -173,7 +175,7 @@ internal class SubscribeExecutor : ISubscribeExecutor
     private async Task InvokeConsumerMethodAsync(MediumMessage message, ConsumerExecutorDescriptor descriptor,
         CancellationToken cancellationToken)
     {
-        var consumerContext = new ConsumerContext(descriptor, message.Origin);
+        var consumerContext = new ConsumerContext(descriptor, message);
         var tracingTimestamp = TracingBefore(message.Origin, descriptor.MethodInfo);
         try
         {
@@ -183,14 +185,15 @@ internal class SubscribeExecutor : ISubscribeExecutor
 
             if (!string.IsNullOrEmpty(ret.CallbackName))
             {
-                var header = new Dictionary<string, string?>
-                {
-                    [Headers.CorrelationId] = message.Origin.GetId(),
-                    [Headers.CorrelationSequence] = (message.Origin.GetCorrelationSequence() + 1).ToString()
-                };
+                ret.CallbackHeader ??= new Dictionary<string, string?>();
+                ret.CallbackHeader[Headers.CorrelationId] = message.Origin.GetId();
+                ret.CallbackHeader[Headers.CorrelationSequence] = (message.Origin.GetCorrelationSequence() + 1).ToString();
+
+                if (message.Origin.Headers.TryGetValue(Headers.TraceParent, out var traceparent))
+                    ret.CallbackHeader[Headers.TraceParent] = traceparent;
 
                 await _provider.GetRequiredService<ICapPublisher>()
-                    .PublishAsync(ret.CallbackName, ret.Result, header, cancellationToken).ConfigureAwait(false);
+                    .PublishAsync(ret.CallbackName, ret.Result, ret.CallbackHeader, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)

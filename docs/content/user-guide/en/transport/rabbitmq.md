@@ -4,6 +4,10 @@ RabbitMQ is an open-source message-broker software that originally implemented t
 
 RabbitMQ can be used in CAP as a message transporter. 
 
+!!! warning "Notes"
+    When using RabbitMQ, the consumer integrated with the CAP application will automatically create a persistent queue after it is started for the first time. Subsequent messages will be normally transmitted to the queue and consumed.
+    However, if you have never started the consumer, the queue will not be created. In this case, if you publish messages first, RabbitMQ Exchange will discard the messages received directly until the consumer is started and the queue is created.
+
 ## Configuration
 
 To use RabbitMQ transporter, you need to install the following package from NuGet:
@@ -46,8 +50,9 @@ VirtualHost | Broker virtual host | string | /
 Port | Port | int | -1
 ExchangeName | Default exchange name | string | cap.default.topic
 QueueArguments  | Extra queue `x-arguments` | QueueArgumentsOptions  |  N/A
+QueueOptions  | Change Options for created queue | QueueRabbitOptions  |  { Durable=true, Exclusive=false, AutoDelete=false }
 ConnectionFactoryOptions  |  RabbitMQClient native connection options | ConnectionFactory | N/A
-CustomHeaders  | Custom subscribe headers |  See the blow |  N/A
+CustomHeadersBuilder  | Custom subscribe headers |  See the blow |  N/A
 PublishConfirms | Enable [publish confirms](https://www.rabbitmq.com/confirms.html#publisher-confirms) | bool | false
 BasicQosOptions | Specify [Qos](https://www.rabbitmq.com/consumer-prefetch.html) of message prefetch | BasicQos | N/A
 
@@ -70,22 +75,22 @@ services.AddCap(x =>
 
 ```
 
-#### CustomHeaders Option
+#### CustomHeadersBuilder Option
 
 When the message sent from the RabbitMQ management console or a heterogeneous system, because of the CAP needs to define additional headers, so an exception will occur at this time. By providing this parameter to set the custom headersn to make the subscriber works.
 
-You can find the description of [Header Information](../cap/messaging#heterogeneous-system-integration) here.
+You can find the description of [Header Information](../cap/messaging.md#heterogeneous-system-integration) here.
 
 Example：
 
 ```cs
 x.UseRabbitMQ(aa =>
 {
-    aa.CustomHeaders = e => new List<KeyValuePair<string, string>>
-    {
-        new KeyValuePair<string, string>(Headers.MessageId, SnowflakeId.Default().NextId().ToString()),
-        new KeyValuePair<string, string>(Headers.MessageName, e.RoutingKey),
-    };
+    aa.CustomHeadersBuilder = (msg, sp) =>
+    [
+        new(DotNetCore.CAP.Messages.Headers.MessageId, sp.GetRequiredService<ISnowflakeId>().NextId().ToString()),
+        new(DotNetCore.CAP.Messages.Headers.MessageName, msg.RoutingKey)
+    ];
 });
 ```
 

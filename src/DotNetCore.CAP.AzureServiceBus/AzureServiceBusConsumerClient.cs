@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
+using DotNetCore.CAP.AzureServiceBus.Helpers;
 using DotNetCore.CAP.Messages;
 using DotNetCore.CAP.Transport;
 using Microsoft.Extensions.Logging;
@@ -19,10 +20,11 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
 {
     private readonly AzureServiceBusOptions _asbOptions;
     private readonly SemaphoreSlim _connectionLock = new(1, 1);
-
     private readonly ILogger _logger;
     private readonly IServiceProvider _serviceProvider;
     private readonly string _subscriptionName;
+    private readonly byte _groupConcurrent;
+    private readonly SemaphoreSlim _semaphore;
 
     private ServiceBusAdministrationClient? _administrationClient;
     private ServiceBusClient? _serviceBusClient;
@@ -31,11 +33,14 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
     public AzureServiceBusConsumerClient(
         ILogger logger,
         string subscriptionName,
+        byte groupConcurrent,
         IOptions<AzureServiceBusOptions> options,
         IServiceProvider serviceProvider)
     {
         _logger = logger;
         _subscriptionName = subscriptionName;
+        _groupConcurrent = groupConcurrent;
+        _semaphore = new SemaphoreSlim(groupConcurrent);
         _serviceProvider = serviceProvider;
         _asbOptions = options.Value ?? throw new ArgumentNullException(nameof(options));
     }
@@ -44,8 +49,7 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
 
     public Action<LogMessageEventArgs>? OnLogCallback { get; set; }
 
-    public BrokerAddress BrokerAddress => new("AzureServiceBus", _asbOptions.ConnectionString);
-
+    public BrokerAddress BrokerAddress => ServiceBusHelpers.GetBrokerAddress(_asbOptions.ConnectionString, _asbOptions.Namespace);
 
     public void Subscribe(IEnumerable<string> topics)
     {
@@ -54,9 +58,9 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
         ConnectAsync().GetAwaiter().GetResult();
 
         topics = topics.Concat(_asbOptions!.SQLFilters?.Select(o => o.Key) ?? Enumerable.Empty<string>());
+
         var allRules = _administrationClient!.GetRulesAsync(_asbOptions!.TopicPath, _subscriptionName).ToEnumerable();
         var allRuleNames = allRules.Select(o => o.Name);
-
 
         foreach (var newRule in topics.Except(allRuleNames))
         {
@@ -71,10 +75,17 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
             }
             else
             {
-                currentRuleToAdd = new CorrelationRuleFilter
+                var correlationRule = new CorrelationRuleFilter
                 {
                     Subject = newRule
                 };
+
+                foreach (var correlationHeader in _asbOptions.DefaultCorrelationHeaders)
+                {
+                    correlationRule.ApplicationProperties.Add(correlationHeader.Key, correlationHeader.Value);
+                }
+
+                currentRuleToAdd = correlationRule;
             }
 
             _administrationClient.CreateRuleAsync(_asbOptions.TopicPath, _subscriptionName,
@@ -123,7 +134,8 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
 
     public void Reject(object? sender)
     {
-        // ignore
+        var commitInput = (AzureServiceBusConsumerCommitInput)sender!;
+        commitInput.AbandonMessageAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()
@@ -154,7 +166,15 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
     {
         var context = ConvertMessage(arg.Message);
 
-        await OnMessageCallback!(context, new AzureServiceBusConsumerCommitInput(arg));
+        if (_groupConcurrent > 0)
+        {
+            await _semaphore.WaitAsync();
+            _ = Task.Run(() => OnMessageCallback!(context, new AzureServiceBusConsumerCommitInput(arg))).ConfigureAwait(false);
+        }
+        else
+        {
+            await OnMessageCallback!(context, new AzureServiceBusConsumerCommitInput(arg));
+        }
     }
 
     private async Task _serviceBusProcessor_ProcessSessionMessageAsync(ProcessSessionMessageEventArgs arg)
@@ -207,10 +227,14 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
                             new CreateSubscriptionOptions(topicPath, _subscriptionName)
                             {
                                 RequiresSession = _asbOptions.EnableSessions,
-                                AutoDeleteOnIdle = _asbOptions.SubscriptionAutoDeleteOnIdle
+                                AutoDeleteOnIdle = _asbOptions.SubscriptionAutoDeleteOnIdle,
+                                LockDuration = _asbOptions.SubscriptionMessageLockDuration,
+                                DefaultMessageTimeToLive = _asbOptions.SubscriptionDefaultMessageTimeToLive,
+                                MaxDeliveryCount = _asbOptions.SubscriptionMaxDeliveryCount,
                             };
 
                         await _administrationClient.CreateSubscriptionAsync(subscriptionDescription);
+
                         _logger.LogInformation(
                             $"Azure Service Bus topic {topicPath} created subscription: {_subscriptionName}");
                     }
@@ -218,7 +242,14 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
 
                 _serviceBusProcessor = !_asbOptions.EnableSessions
                     ? new ServiceBusProcessorFacade(
-                        _serviceBusClient.CreateProcessor(_asbOptions.TopicPath, _subscriptionName))
+                        serviceBusProcessor: _serviceBusClient.CreateProcessor(_asbOptions.TopicPath,
+                            _subscriptionName,
+                            new ServiceBusProcessorOptions
+                            {
+                                AutoCompleteMessages = _asbOptions.AutoCompleteMessages,
+                                MaxConcurrentCalls = _asbOptions.MaxConcurrentCalls,
+                                MaxAutoLockRenewalDuration = _asbOptions.MaxAutoLockRenewalDuration,
+                            }))
                     : new ServiceBusProcessorFacade(
                         serviceBusSessionProcessor: _serviceBusClient.CreateSessionProcessor(_asbOptions.TopicPath,
                             _subscriptionName,
@@ -226,7 +257,9 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
                             {
                                 AutoCompleteMessages = _asbOptions.AutoCompleteMessages,
                                 MaxConcurrentCallsPerSession = _asbOptions.MaxConcurrentCalls,
-                                MaxAutoLockRenewalDuration = TimeSpan.FromSeconds(30),
+                                MaxAutoLockRenewalDuration = _asbOptions.MaxAutoLockRenewalDuration,
+                                MaxConcurrentSessions = _asbOptions.MaxConcurrentSessions,
+                                SessionIdleTimeout = _asbOptions.SessionIdleTimeout,
                             }));
             }
         }
@@ -245,24 +278,17 @@ internal sealed class AzureServiceBusConsumerClient : IConsumerClient
 
         headers.Add(Headers.Group, _subscriptionName);
 
-        List<KeyValuePair<string, string>>? customHeaders = null;
-#pragma warning disable CS0618 // Type or member is obsolete
-        if (_asbOptions.CustomHeaders != null) customHeaders = _asbOptions.CustomHeaders(message).ToList();
-#pragma warning restore CS0618 // Type or member is obsolete
-
         if (_asbOptions.CustomHeadersBuilder != null)
-            customHeaders = _asbOptions.CustomHeadersBuilder(message, _serviceProvider).ToList();
-
-        if (customHeaders?.Any() == true)
+        {
+            var customHeaders = _asbOptions.CustomHeadersBuilder(message, _serviceProvider);
             foreach (var customHeader in customHeaders)
             {
                 var added = headers.TryAdd(customHeader.Key, customHeader.Value);
 
                 if (!added)
-                    _logger.LogWarning(
-                        "Not possible to add the custom header {Header}. A value with the same key already exists in the Message headers.",
-                        customHeader.Key);
+                    _logger.LogWarning("Not possible to add the custom header {Header}. A value with the same key already exists in the Message headers.",customHeader.Key);
             }
+        }
 
         return new TransportMessage(headers, message.Body);
     }

@@ -80,11 +80,12 @@ public class RabbitMQOptions
     /// </summary>
     public QueueArgumentsOptions QueueArguments { get; set; } = new();
 
+
     /// <summary>
-    /// If you need to get additional native delivery args, you can use this function to write into <see cref="CapHeader" />.
+    /// Optional queue arguments, also known as "x-arguments" because of their field name in the AMQP 0-9-1 protocol,
+    /// is a map (dictionary) of arbitrary key/value pairs that can be provided by clients when a queue is declared.
     /// </summary>
-    [Obsolete("Will be dropped in the next releases in favor of the CustomHeadersBuilder property")]
-    public Func<BasicDeliverEventArgs, List<KeyValuePair<string, string>>>? CustomHeaders { get; set; }
+    public QueueRabbitOptions QueueOptions { get; set; } = new();
 
     /// <summary>
     /// If you need to get additional native delivery args, you can use this function to write into <see cref="CapHeader" />.
@@ -161,4 +162,12 @@ public class RabbitMQOptions
         /// </summary>
         public bool Global { get; }
     }
+
+    public class QueueRabbitOptions
+    {
+        public bool Durable { get; set; } = true;
+        public bool Exclusive { get; set; } = false;
+        public bool AutoDelete { get; set; } = false;
+    }
 }
+

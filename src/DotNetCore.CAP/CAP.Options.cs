@@ -12,7 +12,10 @@ using DotNetCore.CAP.Messages;
 namespace DotNetCore.CAP;
 
 /// <summary>
-/// Represents all the options you can use to configure the system.
+/// Provides options to customize various aspects of the message processing pipeline. This includes settings for message expiration,
+/// retry mechanisms, concurrency management, and serialization, among others. This class allows fine-tuning
+/// CAP's behavior to better align with specific application requirements, such as adjusting threading models for
+/// subscriber message processing, setting message expiry times, and customizing serialization settings.
 /// </summary>
 public class CapOptions
 {
@@ -23,12 +26,15 @@ public class CapOptions
         FailedRetryInterval = 60;
         FailedRetryCount = 50;
         ConsumerThreadCount = 1;
-        EnableConsumerPrefetch = false;
+        EnablePublishParallelSend = false;
+        EnableSubscriberParallelExecute = false;
+        SubscriberParallelExecuteThreadCount = Environment.ProcessorCount;
+        SubscriberParallelExecuteBufferFactor = 1;
         Extensions = new List<ICapOptionsExtension>();
         Version = "v1";
         DefaultGroupName = "cap.queue." + Assembly.GetEntryAssembly()?.GetName().Name!.ToLower();
         CollectorCleaningInterval = 300;
-        UseDispatchingPerGroup = false;
+        FallbackWindowLookbackSeconds = 240;
     }
 
     internal IList<ICapOptionsExtension> Extensions { get; }
@@ -90,17 +96,43 @@ public class CapOptions
     public int ConsumerThreadCount { get; set; }
 
     /// <summary>
-    /// If true, the message will be pre fetch to memory queue for parallel execute by thread pool.
-    /// Default is false
+    /// If true, the message will be buffered to memory queue for parallel execute.
+    /// <para>The option is obsolete, use EnableSubscriberParallelExecute instead!</para>
     /// </summary>
-    public bool EnableConsumerPrefetch { get; set; }
+    [Obsolete("Renamed to EnableSubscriberParallelExecute option.")]
+    public bool EnableConsumerPrefetch { get => EnableSubscriberParallelExecute; set => EnableSubscriberParallelExecute = value; }
 
     /// <summary>
-    /// If true then each message group will have own independent dispatching pipeline. Each pipeline use as many threads as
-    /// <see cref="ConsumerThreadCount" /> value is.
+    /// If true, the message will be buffered to memory queue for parallel execute; 
+    /// Default is false.
+    /// <para>Use <see cref="SubscriberParallelExecuteThreadCount"/> to specify the number of parallel threads.</para>
+    /// </summary>
+    public bool EnableSubscriberParallelExecute { get; set; }
+
+    /// <summary>
+    /// With the <c>EnableSubscriberParallelExecute</c> option enabled, specify the number of parallel task execution threads.
+    /// Default is <see cref="Environment.ProcessorCount"/>.
+    /// </summary>
+    public int SubscriberParallelExecuteThreadCount { get; set; }
+
+    /// <summary>
+    /// With the <c>EnableSubscriberParallelExecute</c> option enabled, multiplier used to determine the buffered capacity size in subscriber parallel execution. 
+    /// The buffer capacity is computed by multiplying this factor with the value of <c>SubscriberParallelExecuteThreadCount</c>, 
+    /// which represents the number of threads allocated for parallel processing.
+    /// </summary>
+    public int SubscriberParallelExecuteBufferFactor { get; set; }
+
+    /// <summary>
+    /// If true, the message send task will be parallel execute by .net thread pool.
     /// Default is false.
     /// </summary>
-    public bool UseDispatchingPerGroup { get; set; }
+    public bool EnablePublishParallelSend { get; set; } 
+
+    /// <summary>
+    /// Configure the retry processor to pick up the backtrack time window for Scheduled or Failed status messages.
+    /// Default is 240 seconds.
+    /// </summary>
+    public int FallbackWindowLookbackSeconds { get; set; }
 
     /// <summary>
     /// The interval of the collector processor deletes expired messages.
@@ -124,7 +156,7 @@ public class CapOptions
     /// <param name="extension"></param>
     public void RegisterExtension(ICapOptionsExtension extension)
     {
-        if (extension == null) throw new ArgumentNullException(nameof(extension));
+        ArgumentNullException.ThrowIfNull(extension);
 
         Extensions.Add(extension);
     }

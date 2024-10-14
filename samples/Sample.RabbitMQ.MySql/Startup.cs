@@ -16,7 +16,6 @@ namespace Sample.RabbitMQ.MySql
                 x.UseEntityFramework<AppDbContext>();
                 x.UseRabbitMQ("localhost");
                 x.UseDashboard();
-                x.FailedRetryCount = 5;
                 x.FailedThresholdCallback = failed =>
                 {
                     var logger = failed.ServiceProvider.GetService<ILogger<Startup>>();

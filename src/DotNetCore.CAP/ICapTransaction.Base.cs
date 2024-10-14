@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using DotNetCore.CAP.Messages;
@@ -10,6 +11,11 @@ using DotNetCore.CAP.Persistence;
 using DotNetCore.CAP.Transport;
 
 namespace DotNetCore.CAP;
+
+internal sealed class CapTransactionHolder
+{
+    public ICapTransaction? Transaction;
+}
 
 public abstract class CapTransactionBase : ICapTransaction
 {
@@ -34,8 +40,6 @@ public abstract class CapTransactionBase : ICapTransaction
 
     public abstract Task RollbackAsync(CancellationToken cancellationToken = default);
 
-    public abstract void Dispose();
-
     protected internal virtual void AddToSent(MediumMessage msg)
     {
         _bufferList.Enqueue(msg);
@@ -45,18 +49,28 @@ public abstract class CapTransactionBase : ICapTransaction
     {
         while (!_bufferList.IsEmpty)
         {
+#pragma warning disable CA2012 // Use ValueTasks correctly
             if (_bufferList.TryDequeue(out var message))
             {
                 var isDelayMessage = message.Origin.Headers.ContainsKey(Headers.DelayTime);
                 if (isDelayMessage)
                 {
-                    _dispatcher.EnqueueToScheduler(message, DateTime.Parse(message.Origin.Headers[Headers.SentTime]!)).ConfigureAwait(false);
+
+                    _dispatcher.EnqueueToScheduler(message, DateTime.Parse(message.Origin.Headers[Headers.SentTime]!, CultureInfo.InvariantCulture)).ConfigureAwait(false);
+
                 }
                 else
                 {
                     _dispatcher.EnqueueToPublish(message).ConfigureAwait(false);
                 }
+#pragma warning restore CA2012 // Use ValueTasks correctly
             }
         }
+    }
+
+    public virtual void Dispose()
+    {
+        (DbTransaction as IDisposable)?.Dispose();
+        DbTransaction = null;
     }
 }

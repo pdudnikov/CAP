@@ -41,7 +41,7 @@ public class SubscribeInvoker : ISubscribeInvoker
         var executor = _executors.GetOrAdd(key,
             _ => ObjectMethodExecutor.Create(methodInfo, context.ConsumerDescriptor.ImplTypeInfo));
 
-        using var scope = _serviceProvider.CreateScope();
+        await using var scope = _serviceProvider.CreateAsyncScope();
 
         var provider = scope.ServiceProvider;
 
@@ -62,7 +62,7 @@ public class SubscribeInvoker : ISubscribeInvoker
                 if (message.Value != null)
                 {
                     // use ISerializer when reading from storage, skip other objects if not Json
-                    if (_serializer.IsJsonType(message.Value)) 
+                    if (_serializer.IsJsonType(message.Value))
                     {
                         executeParameters[i] =
                             _serializer.Deserialize(message.Value, parameterDescriptor.ParameterType);
@@ -123,7 +123,16 @@ public class SubscribeInvoker : ISubscribeInvoker
             }
         }
 
-        return new ConsumerExecutedResult(resultObj, message.GetId(), message.GetCallbackName());
+        var callbackName = message.GetCallbackName();
+        if (string.IsNullOrEmpty(callbackName))
+        {
+            return new ConsumerExecutedResult(resultObj, message.GetId(), null, null);
+        }
+        else
+        {
+            var capHeader = executeParameters.FirstOrDefault(x => x is CapHeader) as CapHeader;
+            return new ConsumerExecutedResult(resultObj, message.GetId(), callbackName, capHeader?.ResponseHeader);
+        }
     }
 
     private static object GetCapProvidedParameter(ParameterDescriptor parameterDescriptor, Message message,

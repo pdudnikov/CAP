@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using DotNetCore.CAP.Diagnostics;
@@ -27,6 +28,8 @@ internal class CapPublisher : ICapPublisher
     private readonly IDataStorage _storage;
     private readonly IBootstrapper _bootstrapper;
 
+    private readonly AsyncLocal<CapTransactionHolder> _asyncLocal;
+
     public CapPublisher(IServiceProvider service)
     {
         ServiceProvider = service;
@@ -35,12 +38,20 @@ internal class CapPublisher : ICapPublisher
         _storage = service.GetRequiredService<IDataStorage>();
         _capOptions = service.GetRequiredService<IOptions<CapOptions>>().Value;
         _snowflakeId = service.GetRequiredService<ISnowflakeId>();
-        Transaction = new AsyncLocal<ICapTransaction>();
+        _asyncLocal = new AsyncLocal<CapTransactionHolder>();
     }
 
     public IServiceProvider ServiceProvider { get; }
 
-    public AsyncLocal<ICapTransaction> Transaction { get; }
+    public ICapTransaction? Transaction {
+
+        get => _asyncLocal.Value?.Transaction;
+        set
+        {
+            _asyncLocal.Value ??= new CapTransactionHolder();
+            _asyncLocal.Value.Transaction = value;
+        }
+    }
 
     public async Task PublishAsync<T>(string name, T? value, IDictionary<string, string?> headers,
         CancellationToken cancellationToken = default)
@@ -92,12 +103,12 @@ internal class CapPublisher : ICapPublisher
 
     public void PublishDelay<T>(TimeSpan delayTime, string name, T? value, IDictionary<string, string?> headers)
     {
-        PublishDelayAsync(delayTime, name, value, headers).ConfigureAwait(false);
+        PublishDelayAsync(delayTime, name, value, headers).ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     public void PublishDelay<T>(TimeSpan delayTime, string name, T? value, string? callbackName = null)
     {
-        PublishDelayAsync(delayTime, name, value, callbackName).ConfigureAwait(false);
+        PublishDelayAsync(delayTime, name, value, callbackName).ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     private async Task PublishInternalAsync<T>(string name, T? value, IDictionary<string, string?> headers, TimeSpan? delayTime = null,
@@ -132,11 +143,11 @@ internal class CapPublisher : ICapPublisher
         {
             publishTime += delayTime.Value;
             headers.Add(Headers.DelayTime, delayTime.Value.ToString());
-            headers.Add(Headers.SentTime, publishTime.ToString());
+            headers.Add(Headers.SentTime, publishTime.ToString(CultureInfo.InvariantCulture));
         }
         else
         {
-            headers.Add(Headers.SentTime, publishTime.ToString());
+            headers.Add(Headers.SentTime, publishTime.ToString(CultureInfo.InvariantCulture));
         }
 
         var message = new Message(headers, value);
@@ -146,7 +157,7 @@ internal class CapPublisher : ICapPublisher
         {
             tracingTimestamp = TracingBefore(message);
 
-            if (Transaction.Value?.DbTransaction == null)
+            if (Transaction?.DbTransaction == null)
             {
                 var mediumMessage = await _storage.StoreMessageAsync(name, message).ConfigureAwait(false);
 
@@ -163,7 +174,7 @@ internal class CapPublisher : ICapPublisher
             }
             else
             {
-                var transaction = (CapTransactionBase)Transaction.Value;
+                var transaction = (CapTransactionBase)Transaction;
 
                 var mediumMessage = await _storage.StoreMessageAsync(name, message, transaction.DbTransaction)
                     .ConfigureAwait(false);
@@ -185,7 +196,7 @@ internal class CapPublisher : ICapPublisher
 
     #region tracing
 
-    private long? TracingBefore(Message message)
+    private static long? TracingBefore(Message message)
     {
         if (s_diagnosticListener.IsEnabled(CapDiagnosticListenerNames.BeforePublishMessageStore))
         {
@@ -204,7 +215,7 @@ internal class CapPublisher : ICapPublisher
         return null;
     }
 
-    private void TracingAfter(long? tracingTimestamp, Message message)
+    private static void TracingAfter(long? tracingTimestamp, Message message)
     {
         if (tracingTimestamp != null &&
             s_diagnosticListener.IsEnabled(CapDiagnosticListenerNames.AfterPublishMessageStore))
@@ -222,7 +233,7 @@ internal class CapPublisher : ICapPublisher
         }
     }
 
-    private void TracingError(long? tracingTimestamp, Message message, Exception ex)
+    private static void TracingError(long? tracingTimestamp, Message message, Exception ex)
     {
         if (tracingTimestamp != null &&
             s_diagnosticListener.IsEnabled(CapDiagnosticListenerNames.ErrorPublishMessageStore))
