@@ -40,8 +40,8 @@ public class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         _serviceProvider = serviceProvider;
     }
 
-    public override async Task HandleBasicDeliver(string consumerTag, ulong deliveryTag, bool redelivered, string exchange,
-        string routingKey, IBasicProperties properties, ReadOnlyMemory<byte> body)
+    public override async Task HandleBasicDeliver(string consumerTag, ulong deliveryTag, bool redelivered, string exchange, string routingKey,
+        IBasicProperties properties, byte[] body)
     {
         if (_usingTaskRun)
         {
@@ -101,14 +101,14 @@ public class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         _semaphore.Release();
     }
 
-    public override async Task OnCancel(params string[] consumerTags)
+    public override async Task OnCancel()
     {
-        await base.OnCancel(consumerTags);
+        await base.OnCancel();
 
         var args = new LogMessageEventArgs
         {
             LogType = MqLogType.ConsumerCancelled,
-            Reason = string.Join(",", consumerTags)
+            Reason = string.Empty
         };
 
         _logCallback(args);
